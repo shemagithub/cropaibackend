@@ -13,6 +13,7 @@ from typing import List, Optional, Literal
 import bcrypt
 import jwt
 import httpx
+import time
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from fastapi.security import HTTPBearer
 from dotenv import load_dotenv
@@ -222,12 +223,15 @@ app = FastAPI(title="CropDoctor AI", lifespan=lifespan)
 
 
 def make_jwt(user_id: str) -> str:
+    now = int(time.time())
     payload = {
         "sub": user_id,
-        "exp": datetime.now(timezone.utc) + timedelta(days=JWT_DAYS),
-        "iat": datetime.now(timezone.utc),
+        "exp": now + (JWT_DAYS * 24 * 60 * 60),
+        "iat": now,
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    key = jwt.jwk.OctetJWK(JWT_SECRET.encode() if isinstance(JWT_SECRET, str) else JWT_SECRET)
+    jwt_instance = jwt.JWT()
+    return jwt_instance.encode(payload, key, alg=JWT_ALG)
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> User:
@@ -238,9 +242,11 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> User:
     user_id: Optional[str] = None
     # 1) Try JWT
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        key = jwt.jwk.OctetJWK(JWT_SECRET.encode() if isinstance(JWT_SECRET, str) else JWT_SECRET)
+        jwt_instance = jwt.JWT()
+        payload = jwt_instance.decode(token, key, algorithms=[JWT_ALG])
         user_id = payload.get("sub")
-    except jwt.PyJWTError:
+    except Exception:
         user_id = None
 
     # 2) Fallback: Emergent session_token
@@ -399,8 +405,8 @@ def _parse_json_loose(text: str) -> dict:
 
 async def analyze_image_with_ai(image_base64: str, model_choice: str) -> dict:
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not gemini_key or gemini_key == "your_new_gemini_api_key_here":
-        logger.error("GEMINI_API_KEY not configured or is placeholder in backend/.env")
+    if not gemini_key:
+        logger.error("GEMINI_API_KEY not configured in backend/.env")
         raise HTTPException(
             500,
             "AI service not configured. Please add a valid GEMINI_API_KEY to backend/.env",
